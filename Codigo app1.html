@@ -1,0 +1,680 @@
+HTML import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+
+// Ensure Tailwind CSS is available in the environment.
+// For local development, you might add:
+// <script src="https://cdn.tailwindcss.com"></script>
+// in your public/index.html or similar.
+
+// Global variables provided by the Canvas environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Premium Behaviors - These remain constant
+const premiumBehaviors = [
+  "Expressing Empathy",
+  "Expressing Confidence",
+  "Setting Expectations",
+  "Asking 5 Probing Questions",
+  "Offering a Total Personalized Solution",
+  "Call Closure with Recap",
+  "Temp Check (Customer Experience Check)",
+  "Outlining Next Steps",
+  "Memorable Goodbye",
+  "Resource Shared with Customer",
+  "Free Reflection (open notes)"
+];
+
+function App() {
+  const [screen, setScreen] = useState('login'); // 'login', 'scenario', 'review'
+  const [userInfo, setUserInfo] = useState(null);
+  const [currentScenarioIndex, setCurrentScenarioIndex] = useState(0);
+  const [agentResponses, setAgentResponses] = useState({});
+  const [feedback, setFeedback] = useState({});
+  const [completedScenarios, setCompletedScenarios] = useState([]); // Stores { scenarioId, responses, feedback }
+  const [selectedReviewScenario, setSelectedReviewScenario] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState(''); // 'success', 'error', 'info'
+
+  // Firebase states
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false); // To ensure auth is ready before Firestore ops
+
+  // Dynamic data from Firestore
+  const [scenarios, setScenarios] = useState([]);
+  const [goldStandardPhrases, setGoldStandardPhrases] = useState({});
+  const [dataLoading, setDataLoading] = useState(true); // Loading state for initial data fetch
+
+  // Function to show a temporary message
+  const showMessage = (msg, type = 'info') => {
+    setMessage(msg);
+    setMessageType(type);
+    setTimeout(() => {
+      setMessage('');
+      setMessageType('');
+    }, 3000); // Message disappears after 3 seconds
+  };
+
+  // Initialize Firebase and set up auth listener
+  useEffect(() => {
+    try {
+      const app = initializeApp(firebaseConfig);
+      const firestore = getFirestore(app);
+      const authInstance = getAuth(app);
+      setDb(firestore);
+      setAuth(authInstance);
+
+      // Sign in with custom token if available, otherwise anonymously
+      const signIn = async () => {
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(authInstance, initialAuthToken);
+          } else {
+            await signInAnonymously(authInstance);
+          }
+        } catch (error) {
+          console.error("Firebase authentication error:", error);
+          showMessage(`Authentication failed: ${error.message}`, 'error');
+        }
+      };
+      signIn();
+
+      // Listen for auth state changes
+      const unsubscribe = onAuthStateChanged(authInstance, (user) => {
+        if (user) {
+          setUserId(user.uid);
+          setIsAuthReady(true);
+          console.log("User authenticated:", user.uid);
+        } else {
+          setUserId(null);
+          setIsAuthReady(true); // Still set to true even if no user, means auth check is done
+          console.log("No user authenticated.");
+        }
+      });
+
+      return () => unsubscribe(); // Cleanup auth listener
+    } catch (error) {
+      console.error("Failed to initialize Firebase:", error);
+      showMessage(`Firebase initialization failed: ${error.message}`, 'error');
+    }
+  }, []); // Run once on component mount
+
+  // Fetch scenarios and gold standard phrases from Firestore
+  useEffect(() => {
+    if (!db || !isAuthReady || !userId) {
+      // Wait for Firebase to be initialized and authenticated
+      return;
+    }
+
+    setDataLoading(true);
+
+    // Fetch Scenarios
+    const scenariosCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/scenarios`);
+    const unsubscribeScenarios = onSnapshot(scenariosCollectionRef, (snapshot) => {
+      const fetchedScenarios = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setScenarios(fetchedScenarios);
+      console.log("Fetched scenarios:", fetchedScenarios);
+      setDataLoading(false);
+    }, (error) => {
+      console.error("Error fetching scenarios:", error);
+      showMessage(`Error loading scenarios: ${error.message}`, 'error');
+      setDataLoading(false);
+    });
+
+    // Fetch Gold Standard Phrases
+    const goldStandardDocRef = doc(db, `artifacts/${appId}/users/${userId}/goldStandard/phrases`);
+    const unsubscribeGoldStandard = onSnapshot(goldStandardDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setGoldStandardPhrases(docSnap.data());
+        console.log("Fetched gold standard phrases:", docSnap.data());
+      } else {
+        console.log("No gold standard phrases found. Initializing with default structure.");
+        // Initialize with an empty object if not found
+        setGoldStandardPhrases({});
+        // Optionally, you could add a default set here or prompt the user to add them.
+      }
+      setDataLoading(false);
+    }, (error) => {
+      console.error("Error fetching gold standard phrases:", error);
+      showMessage(`Error loading gold standard phrases: ${error.message}`, 'error');
+      setDataLoading(false);
+    });
+
+    // Fetch completed scenarios for review
+    const completedScenariosCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/completedScenarios`);
+    const unsubscribeCompletedScenarios = onSnapshot(completedScenariosCollectionRef, (snapshot) => {
+      const fetchedCompletedScenarios = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setCompletedScenarios(fetchedCompletedScenarios);
+      console.log("Fetched completed scenarios for review:", fetchedCompletedScenarios);
+    }, (error) => {
+      console.error("Error fetching completed scenarios:", error);
+      showMessage(`Error loading completed scenarios for review: ${error.message}`, 'error');
+    });
+
+
+    return () => {
+      unsubscribeScenarios();
+      unsubscribeGoldStandard();
+      unsubscribeCompletedScenarios();
+    }; // Cleanup listeners
+  }, [db, isAuthReady, userId]); // Re-run when db, auth readiness, or userId changes
+
+  // Handle login form submission
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const employeeId = e.target.employeeId.value;
+    const firstName = e.target.firstName.value;
+    const lastName = e.target.lastName.value;
+    const campaign = e.target.campaign.value;
+
+    if (!/^\d{7,8}$/.test(employeeId)) {
+      showMessage('Employee ID must be 7 or 8 digits.', 'error');
+      return;
+    }
+
+    setUserInfo({ employeeId, firstName, lastName, campaign });
+    setScreen('scenario');
+    showMessage('Login successful! Welcome to the training simulation.', 'success');
+  };
+
+  // Handle agent response change
+  const handleResponseChange = (behavior, value) => {
+    setAgentResponses(prev => ({ ...prev, [behavior]: value }));
+  };
+
+  // Handle scenario submission and LLM feedback
+  const handleSubmitScenario = async () => {
+    if (!db || !userId) {
+      showMessage('Database not ready. Please try again.', 'error');
+      return;
+    }
+
+    setIsLoading(true);
+    const currentScenario = scenarios[currentScenarioIndex];
+    const newFeedback = {};
+
+    for (const behavior of premiumBehaviors) {
+      const agentInput = agentResponses[behavior] || '';
+      const idealExample = goldStandardPhrases[behavior] && goldStandardPhrases[behavior].length > 0
+        ? goldStandardPhrases[behavior][0]
+        : "No ideal example available for this behavior. Please add some to Firestore.";
+
+      let prompt = `
+        You are an experienced call center trainer specializing in handling negative news for Verizon customers.
+        The current customer scenario is: "${currentScenario.description}"
+
+        The agent's response for "${behavior}" is: "${agentInput}"
+
+        Your task is to:
+        1. Evaluate the agent's response for "${behavior}" based on professionalism, empathy, and effectiveness in handling negative news.
+        2. Provide constructive feedback on the agent's response.
+        3. Provide an ideal example for this specific behavior, drawing from the following "gold standard" phrase: "${idealExample}".
+        4. Explain how the ideal example aligns with the PEAR framework (Position, Empathy, Action, Reassure). If a PEAR component is not directly applicable to this specific behavior, state 'N/A'.
+
+        Provide the response in JSON format with the following schema:
+        {
+          "feedback": "string",
+          "idealExample": "string",
+          "pearAlignment": {
+            "position": "string",
+            "empathy": "string",
+            "action": "string",
+            "reassure": "string"
+          }
+        }
+      `;
+
+      try {
+        const payload = {
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                "feedback": { "type": "STRING" },
+                "idealExample": { "type": "STRING" },
+                "pearAlignment": {
+                  "type": "OBJECT",
+                  "properties": {
+                    "position": { "type": "STRING" },
+                    "empathy": { "type": "STRING" },
+                    "action": { "type": "STRING" },
+                    "reassure": { "type": "STRING" }
+                  }
+                }
+              },
+              "propertyOrdering": ["feedback", "idealExample", "pearAlignment"]
+            }
+          }
+        };
+
+        const apiKey = ""; // Canvas will provide this in runtime
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (result.candidates && result.candidates.length > 0 &&
+            result.candidates[0].content && result.candidates[0].content.parts &&
+            result.candidates[0].content.parts.length > 0) {
+          const jsonString = result.candidates[0].content.parts[0].text;
+          try {
+            const parsedJson = JSON.parse(jsonString);
+            newFeedback[behavior] = parsedJson;
+          } catch (parseError) {
+            console.error(`Error parsing JSON for ${behavior}:`, parseError, jsonString);
+            newFeedback[behavior] = {
+              feedback: "Error processing feedback. Please try again.",
+              idealExample: idealExample,
+              pearAlignment: { position: "N/A", empathy: "N/A", action: "N/A", reassure: "N/A" }
+            };
+          }
+        } else {
+          console.error(`Unexpected LLM response structure for ${behavior}:`, result);
+          newFeedback[behavior] = {
+            feedback: "Could not generate feedback. Unexpected LLM response.",
+            idealExample: idealExample,
+            pearAlignment: { position: "N/A", empathy: "N/A", action: "N/A", reassure: "N/A" }
+          };
+        }
+      } catch (error) {
+        console.error(`Error fetching feedback for ${behavior}:`, error);
+        newFeedback[behavior] = {
+          feedback: `Failed to get feedback: ${error.message}`,
+          idealExample: idealExample,
+          pearAlignment: { position: "N/A", empathy: "N/A", action: "N/A", reassure: "N/A" }
+        };
+      }
+    }
+
+    // Save completed scenario and feedback to Firestore
+    try {
+      const completedScenariosCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/completedScenarios`);
+      await addDoc(completedScenariosCollectionRef, {
+        scenarioId: currentScenario.id,
+        scenarioTitle: currentScenario.title,
+        responses: JSON.stringify(agentResponses), // Stringify complex objects
+        feedback: JSON.stringify(newFeedback), // Stringify complex objects
+        timestamp: new Date().toISOString()
+      });
+      showMessage('Scenario completed and saved!', 'success');
+    } catch (error) {
+      console.error("Error saving completed scenario:", error);
+      showMessage(`Error saving scenario: ${error.message}`, 'error');
+    }
+
+    setFeedback(newFeedback);
+    // The completedScenarios state will be updated by the onSnapshot listener
+    setIsLoading(false);
+    showMessage('Feedback generated! Review your responses below.', 'success');
+  };
+
+  // Navigate to the next scenario
+  const handleNextScenario = () => {
+    if (currentScenarioIndex < scenarios.length - 1) {
+      setCurrentScenarioIndex(prev => prev + 1);
+      setAgentResponses({}); // Clear responses for new scenario
+      setFeedback({}); // Clear feedback for new scenario
+      showMessage('Moving to the next scenario.', 'info');
+    } else {
+      showMessage('You have completed all scenarios! Head to the Review section.', 'info');
+      setScreen('review');
+    }
+  };
+
+  // Navigate to the previous scenario
+  const handlePreviousScenario = () => {
+    if (currentScenarioIndex > 0) {
+      setCurrentScenarioIndex(prev => prev - 1);
+      setAgentResponses({}); // Clear responses for new scenario
+      setFeedback({}); // Clear feedback for new scenario
+      showMessage('Moving to the previous scenario.', 'info');
+    } else {
+      showMessage('This is the first scenario.', 'info');
+    }
+  };
+
+  // Render the current screen
+  const renderScreen = () => {
+    if (dataLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
+          <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+          <p className="mt-4 text-lg text-gray-700">Loading training data...</p>
+        </div>
+      );
+    }
+
+    switch (screen) {
+      case 'login':
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-blue-500 to-indigo-600 p-4">
+            <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md animate__animated animate__fadeInDown">
+              <h2 className="text-3xl font-extrabold text-center text-gray-900 mb-6">Agent Login</h2>
+              <form onSubmit={handleLogin} className="space-y-6">
+                <div>
+                  <label htmlFor="employeeId" className="block text-sm font-medium text-gray-700 mb-1">Employee ID (7-8 digits)</label>
+                  <input
+                    type="text"
+                    id="employeeId"
+                    name="employeeId"
+                    pattern="\d{7,8}"
+                    title="Employee ID must be 7 or 8 digits"
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                  <input
+                    type="text"
+                    id="firstName"
+                    name="firstName"
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                  <input
+                    type="text"
+                    id="lastName"
+                    name="lastName"
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="campaign" className="block text-sm font-medium text-gray-700 mb-1">Campaign</label>
+                  <input
+                    type="text"
+                    id="campaign"
+                    name="campaign"
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                >
+                  Login
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+
+      case 'scenario':
+        const currentScenario = scenarios[currentScenarioIndex];
+        if (!currentScenario) {
+          return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+              <p className="text-xl text-gray-700">No scenarios available. Please add scenarios to Firestore.</p>
+              <p className="text-md text-gray-500 mt-2">
+                You can add scenarios to the `artifacts/{appId}/users/{userId}/scenarios` collection in Firestore.
+              </p>
+              <button
+                onClick={() => setScreen('review')}
+                className="mt-4 py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 mr-2"
+              >
+                Review Past Scenarios
+              </button>
+              <button
+                onClick={() => {
+                  setScreen('login');
+                  setUserInfo(null);
+                  setCurrentScenarioIndex(0);
+                  setAgentResponses({});
+                  setFeedback({});
+                  setCompletedScenarios([]);
+                  setSelectedReviewScenario(null);
+                  showMessage('Logged out successfully.', 'info');
+                }}
+                className="mt-2 py-2 px-4 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                  >
+                    Logout
+                  </button>
+                </nav>
+              </div>
+            </header>
+
+            <main className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Scenario Details Panel */}
+              <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg animate__animated animate__fadeInLeft">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">Scenario: {currentScenario.title}</h2>
+                <img
+                  src={currentScenario.image}
+                  alt={currentScenario.title}
+                  className="w-full h-48 object-cover rounded-lg mb-4 shadow-md"
+                  onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/400x250/CCCCCC/333333?text=Image+Not+Found`; }}
+                />
+                <p className="text-gray-700 mb-4">{currentScenario.description}</p>
+                <div className="flex justify-between items-center mt-4">
+                  <button
+                    onClick={handlePreviousScenario}
+                    disabled={currentScenarioIndex === 0}
+                    className="py-2 px-4 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold rounded-lg shadow-md transition duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-gray-600 font-medium">Scenario {currentScenarioIndex + 1} of {scenarios.length}</span>
+                  <button
+                    onClick={handleNextScenario}
+                    className="py-2 px-4 bg-blue-500 hover:bg-blue-600 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+              {/* Premium Behaviors Input Panel */}
+              <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg animate__animated animate__fadeInRight">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">Practice Premium Behaviors</h2>
+                <div className="space-y-6">
+                  {premiumBehaviors.map(behavior => (
+                    <div key={behavior} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                      <label htmlFor={behavior} className="block text-lg font-semibold text-gray-800 mb-2">
+                        {behavior}
+                      </label>
+                      <textarea
+                        id={behavior}
+                        value={agentResponses[behavior] || ''}
+                        onChange={(e) => handleResponseChange(behavior, e.target.value)}
+                        rows="3"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 resize-y"
+                        placeholder={`Type your response for ${behavior}...`}
+                      ></textarea>
+
+                      {isLoading && (
+                        <div className="flex items-center justify-center mt-2">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+                          <span className="ml-2 text-indigo-600">Generating feedback...</span>
+                        </div>
+                      )}
+
+                      {feedback[behavior] && (
+                        <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200 animate__animated animate__fadeInUp">
+                          <h3 className="text-md font-bold text-blue-800 mb-2">Feedback for {behavior}:</h3>
+                          <p className="text-gray-700 mb-2"><strong>Your Feedback:</strong> {feedback[behavior].feedback}</p>
+                          <p className="text-gray-700 mb-2"><strong>Ideal Example:</strong> {feedback[behavior].idealExample}</p>
+                          <div className="mt-2 text-sm text-blue-700">
+                            <strong>PEAR Alignment:</strong>
+                            <ul className="list-disc list-inside ml-2">
+                              <li><strong>Position:</strong> {feedback[behavior].pearAlignment.position}</li>
+                              <li><strong>Empathy:</strong> {feedback[behavior].pearAlignment.empathy}</li>
+                              <li><strong>Action:</strong> {feedback[behavior].pearAlignment.action}</li>
+                              <li><strong>Reassure:</strong> {feedback[behavior].pearAlignment.reassure}</li>
+                            </ul>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={handleSubmitScenario}
+                  disabled={isLoading}
+                  className="mt-6 w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Submitting...' : 'Submit Scenario for Feedback'}
+                </button>
+              </div>
+            </main>
+          </div>
+        );
+
+      case 'review':
+        return (
+          <div className="flex flex-col min-h-screen bg-gray-100 p-4">
+            <header className="bg-white shadow-md rounded-xl p-4 mb-6 flex justify-between items-center animate__animated animate__fadeInDown">
+              <h1 className="text-3xl font-extrabold text-gray-900">Review Past Scenarios</h1>
+              <div className="flex items-center">
+                {userId && <span className="text-gray-600 text-sm mr-4">User ID: {userId}</span>}
+                <nav>
+                  <button
+                    onClick={() => setScreen('scenario')}
+                    className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 mr-2"
+                  >
+                    Back to Training
+                  </button>
+                  <button
+                    onClick={() => {
+                      setScreen('login');
+                      setUserInfo(null);
+                      setCurrentScenarioIndex(0);
+                      setAgentResponses({});
+                      setFeedback({});
+                      setCompletedScenarios([]);
+                      setSelectedReviewScenario(null);
+                      showMessage('Logged out successfully.', 'info');
+                    }}
+                    className="py-2 px-4 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                  >
+                    Logout
+                  </button>
+                </nav>
+              </div>
+            </header>
+
+            <main className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Completed Scenarios List */}
+              <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg animate__animated animate__fadeInLeft">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">Your Completed Scenarios</h2>
+                {completedScenarios.length === 0 ? (
+                  <p className="text-gray-600">No scenarios completed yet. Start training!</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {completedScenarios.map((scenario, index) => (
+                      <li key={scenario.id}> {/* Use scenario.id for unique key */}
+                        <button
+                          onClick={() => setSelectedReviewScenario({
+                            ...scenario,
+                            responses: JSON.parse(scenario.responses), // Parse back from string
+                            feedback: JSON.parse(scenario.feedback) // Parse back from string
+                          })}
+                          className={`w-full text-left py-3 px-4 rounded-lg shadow-md transition duration-200 ease-in-out ${
+                            selectedReviewScenario?.id === scenario.id
+                              ? 'bg-indigo-100 text-indigo-800 font-bold border-2 border-indigo-500'
+                              : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                          }`}
+                        >
+                          {scenario.scenarioTitle} (Completed: {new Date(scenario.timestamp).toLocaleDateString()})
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Selected Scenario Review */}
+              <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg animate__animated animate__fadeInRight">
+                {selectedReviewScenario ? (
+                  <>
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4">Review: {selectedReviewScenario.scenarioTitle}</h2>
+                    <div className="space-y-6">
+                      {premiumBehaviors.map(behavior => (
+                        <div key={behavior} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                          <h3 className="text-lg font-semibold text-gray-800 mb-2">{behavior}</h3>
+                          <p className="text-gray-700 mb-2">
+                            <strong>Your Response:</strong> {selectedReviewScenario.responses[behavior] || 'N/A'}
+                          </p>
+                          {selectedReviewScenario.feedback[behavior] && (
+                            <div className="mt-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                              <p className="text-gray-700 mb-2">
+                                <strong>Feedback:</strong> {selectedReviewScenario.feedback[behavior].feedback}
+                              </p>
+                              <p className="text-gray-700 mb-2">
+                                <strong>Ideal Example:</strong> {selectedReviewScenario.feedback[behavior].idealExample}
+                              </p>
+                              <div className="mt-2 text-sm text-blue-700">
+                                <strong>PEAR Alignment:</strong>
+                                <ul className="list-disc list-inside ml-2">
+                                  <li><strong>Position:</strong> {selectedReviewScenario.feedback[behavior].pearAlignment.position}</li>
+                                  <li><strong>Empathy:</strong> {selectedReviewScenario.feedback[behavior].pearAlignment.empathy}</li>
+                                  <li><strong>Action:</strong> {selectedReviewScenario.feedback[behavior].pearAlignment.action}</li>
+                                  <li><strong>Reassure:</strong> {selectedReviewScenario.feedback[behavior].pearAlignment.reassure}</li>
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-600">Select a scenario from the left to review its details and feedback.</p>
+                )}
+              </div>
+            </main>
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="font-sans antialiased text-gray-900">
+      {/* Global CSS for Inter font and animate.css */}
+      <style>
+        {`
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+          body {
+            font-family: 'Inter', sans-serif;
+          }
+          /* animate.css import */
+          @import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
+        `}
+      </style>
+
+      {/* Message Box */}
+      {message && (
+        <div className={`fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 animate__animated animate__fadeInRight ${
+          messageType === 'success' ? 'bg-green-500 text-white' :
+          messageType === 'error' ? 'bg-red-500 text-white' :
+          'bg-blue-500 text-white'
+        }`}>
+          {message}
+        </div>
+      )}
+
+      {renderScreen()}
+    </div>
+  );
+}
+
+export default App;
