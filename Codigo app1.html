@@ -1,4 +1,4 @@
-HTML import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
@@ -444,6 +444,45 @@ function App() {
                   showMessage('Logged out successfully.', 'info');
                 }}
                 className="mt-2 py-2 px-4 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+              >
+                Logout
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div className="flex flex-col min-h-screen bg-gray-100 p-4">
+            <header className="bg-white shadow-md rounded-xl p-4 mb-6 flex justify-between items-center animate__animated animate__fadeInDown">
+              <div className="flex items-center"> {/* Contenedor para el logo y el título */}
+                <img
+                  src="uploaded:image_506f1b.jpg-5de04739-f5e4-4b53-ad6e-98be9aa2c764" // Enlace a la imagen del logo
+                  alt="Premium Word Choice Web App Logo"
+                  className="h-16 w-16 mr-4 rounded-full shadow-md object-cover" // Ajusta el tamaño y añade estilos
+                  onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/64x64/CCCCCC/333333?text=Logo`; }} // Fallback de imagen
+                />
+                <h1 className="text-3xl font-extrabold text-gray-900">Verizon Agent Training</h1>
+              </div>
+              <div className="flex items-center">
+                {userId && <span className="text-gray-600 text-sm mr-4">User ID: {userId}</span>}
+                <nav>
+                  <button
+                    onClick={() => setScreen('review')}
+                    className="py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 mr-2"
+                  >
+                    Review Past Scenarios
+                  </button>
+                  <button
+                    onClick={() => {
+                      setScreen('login');
+                      setUserInfo(null);
+                      setCurrentScenarioIndex(0);
+                      setAgentResponses({});
+                      setFeedback({});
+                      setCompletedScenarios([]);
+                      setSelectedReviewScenario(null);
+                      showMessage('Logged out successfully.', 'info');
+                    }}
+                    className="py-2 px-4 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
                   >
                     Logout
                   </button>
@@ -540,7 +579,15 @@ function App() {
         return (
           <div className="flex flex-col min-h-screen bg-gray-100 p-4">
             <header className="bg-white shadow-md rounded-xl p-4 mb-6 flex justify-between items-center animate__animated animate__fadeInDown">
-              <h1 className="text-3xl font-extrabold text-gray-900">Review Past Scenarios</h1>
+              <div className="flex items-center"> {/* Contenedor para el logo y el título */}
+                <img
+                  src="uploaded:image_506f1b.jpg-5de04739-f5e4-4b53-ad6e-98be9aa2c764" // Enlace a la imagen del logo
+                  alt="Premium Word Choice Web App Logo"
+                  className="h-16 w-16 mr-4 rounded-full shadow-md object-cover" // Ajusta el tamaño y añade estilos
+                  onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/64x64/CCCCCC/333333?text=Logo`; }} // Fallback de imagen
+                />
+                <h1 className="text-3xl font-extrabold text-gray-900">Review Past Scenarios</h1>
+              </div>
               <div className="flex items-center">
                 {userId && <span className="text-gray-600 text-sm mr-4">User ID: {userId}</span>}
                 <nav>
